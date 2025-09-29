@@ -17,22 +17,27 @@ import (
 type Client struct {
 	baseURL    *url.URL
 	httpClient *http.Client
+	apiKey     string
+	apiSecret  string
+	databaseID string
 }
 
-// Option configures a Client instance.
-type Option func(*Client)
-
-// WithHTTPClient overrides the default HTTP client used to perform requests.
-func WithHTTPClient(h *http.Client) Option {
-	return func(c *Client) {
-		c.httpClient = h
-	}
+// Config captures the parameters required to establish a connection.
+type Config struct {
+	BaseURL    string
+	DatabaseID string
+	APIKey     string
+	APISecret  string
+	HTTPClient *http.Client
 }
 
-// NewClient creates a new Client pointing to the provided base URL.
-func NewClient(baseURL string, opts ...Option) (*Client, error) {
-	if strings.TrimSpace(baseURL) == "" {
-		return nil, errors.New("base URL is required")
+const defaultBaseURL = "https://inceptiondb.hola.cloud"
+
+// NewClient creates a new Client from the provided configuration.
+func NewClient(cfg Config) (*Client, error) {
+	baseURL := strings.TrimSpace(cfg.BaseURL)
+	if baseURL == "" {
+		baseURL = defaultBaseURL
 	}
 
 	parsed, err := url.Parse(baseURL)
@@ -48,12 +53,10 @@ func NewClient(baseURL string, opts ...Option) (*Client, error) {
 
 	c := &Client{
 		baseURL:    parsed,
-		httpClient: http.DefaultClient,
-	}
-	for _, opt := range opts {
-		if opt != nil {
-			opt(c)
-		}
+		httpClient: cfg.HTTPClient,
+		apiKey:     strings.TrimSpace(cfg.APIKey),
+		apiSecret:  strings.TrimSpace(cfg.APISecret),
+		databaseID: strings.TrimSpace(cfg.DatabaseID),
 	}
 	if c.httpClient == nil {
 		c.httpClient = http.DefaultClient
@@ -64,7 +67,7 @@ func NewClient(baseURL string, opts ...Option) (*Client, error) {
 // ListCollections retrieves the collections metadata available in the server.
 func (c *Client) ListCollections(ctx context.Context) ([]Collection, error) {
 	var collections []Collection
-	if err := c.doJSON(ctx, http.MethodGet, "/v1/collections", nil, &collections); err != nil {
+	if err := c.doJSON(ctx, http.MethodGet, c.collectionsPath(), nil, &collections); err != nil {
 		return nil, err
 	}
 	return collections, nil
@@ -80,7 +83,7 @@ func (c *Client) CreateCollection(ctx context.Context, req *CreateCollectionRequ
 		return nil, fmt.Errorf("encode create collection request: %w", err)
 	}
 	var result Collection
-	if err := c.doJSON(ctx, http.MethodPost, "/v1/collections", body, &result); err != nil {
+	if err := c.doJSON(ctx, http.MethodPost, c.collectionsPath(), body, &result); err != nil {
 		return nil, err
 	}
 	return &result, nil
@@ -89,7 +92,7 @@ func (c *Client) CreateCollection(ctx context.Context, req *CreateCollectionRequ
 // GetCollection retrieves the metadata of a single collection.
 func (c *Client) GetCollection(ctx context.Context, collection string) (*Collection, error) {
 	var result Collection
-	if err := c.doJSON(ctx, http.MethodGet, collectionPath(collection), nil, &result); err != nil {
+	if err := c.doJSON(ctx, http.MethodGet, c.collectionPath(collection), nil, &result); err != nil {
 		return nil, err
 	}
 	return &result, nil
@@ -97,7 +100,7 @@ func (c *Client) GetCollection(ctx context.Context, collection string) (*Collect
 
 // DropCollection deletes the collection and its indexes.
 func (c *Client) DropCollection(ctx context.Context, collection string) error {
-	return c.doJSON(ctx, http.MethodPost, collectionActionPath(collection, "dropCollection"), nil, nil)
+	return c.doJSON(ctx, http.MethodPost, c.collectionActionPath(collection, "dropCollection"), nil, nil)
 }
 
 // SetDefaults configures the default document used when inserting new rows.
@@ -107,7 +110,7 @@ func (c *Client) SetDefaults(ctx context.Context, collection string, defaults ma
 		return nil, fmt.Errorf("encode defaults request: %w", err)
 	}
 	result := map[string]any{}
-	if err := c.doJSON(ctx, http.MethodPost, collectionActionPath(collection, "setDefaults"), body, &result); err != nil {
+	if err := c.doJSON(ctx, http.MethodPost, c.collectionActionPath(collection, "setDefaults"), body, &result); err != nil {
 		return nil, err
 	}
 	return result, nil
@@ -116,7 +119,7 @@ func (c *Client) SetDefaults(ctx context.Context, collection string, defaults ma
 // ListIndexes returns the indexes registered in a collection.
 func (c *Client) ListIndexes(ctx context.Context, collection string) ([]Index, error) {
 	var result []Index
-	if err := c.doJSON(ctx, http.MethodPost, collectionActionPath(collection, "listIndexes"), nil, &result); err != nil {
+	if err := c.doJSON(ctx, http.MethodPost, c.collectionActionPath(collection, "listIndexes"), nil, &result); err != nil {
 		return nil, err
 	}
 	return result, nil
@@ -132,7 +135,7 @@ func (c *Client) CreateIndex(ctx context.Context, collection string, req *Create
 		return nil, fmt.Errorf("encode create index request: %w", err)
 	}
 	var result Index
-	if err := c.doJSON(ctx, http.MethodPost, collectionActionPath(collection, "createIndex"), body, &result); err != nil {
+	if err := c.doJSON(ctx, http.MethodPost, c.collectionActionPath(collection, "createIndex"), body, &result); err != nil {
 		return nil, err
 	}
 	return &result, nil
@@ -145,7 +148,7 @@ func (c *Client) GetIndex(ctx context.Context, collection, name string) (*Index,
 		return nil, fmt.Errorf("encode get index request: %w", err)
 	}
 	var result Index
-	if err := c.doJSON(ctx, http.MethodPost, collectionActionPath(collection, "getIndex"), body, &result); err != nil {
+	if err := c.doJSON(ctx, http.MethodPost, c.collectionActionPath(collection, "getIndex"), body, &result); err != nil {
 		return nil, err
 	}
 	return &result, nil
@@ -157,13 +160,13 @@ func (c *Client) DropIndex(ctx context.Context, collection, name string) error {
 	if err != nil {
 		return fmt.Errorf("encode drop index request: %w", err)
 	}
-	return c.doJSON(ctx, http.MethodPost, collectionActionPath(collection, "dropIndex"), body, nil)
+	return c.doJSON(ctx, http.MethodPost, c.collectionActionPath(collection, "dropIndex"), body, nil)
 }
 
 // Size returns statistics about the collection usage. This endpoint is experimental.
 func (c *Client) Size(ctx context.Context, collection string) (map[string]any, error) {
 	result := map[string]any{}
-	if err := c.doJSON(ctx, http.MethodPost, collectionActionPath(collection, "size"), nil, &result); err != nil {
+	if err := c.doJSON(ctx, http.MethodPost, c.collectionActionPath(collection, "size"), nil, &result); err != nil {
 		return nil, err
 	}
 	return result, nil
@@ -175,7 +178,7 @@ func (c *Client) InsertStream(ctx context.Context, collection string, reader io.
 	if reader == nil {
 		reader = http.NoBody
 	}
-	return c.stream(ctx, http.MethodPost, collectionActionPath(collection, "insert"), reader, "application/json")
+	return c.stream(ctx, http.MethodPost, c.collectionActionPath(collection, "insert"), reader, "application/json")
 }
 
 // InsertDocuments is a convenience helper that encodes the provided documents as
@@ -199,7 +202,7 @@ func (c *Client) Find(ctx context.Context, collection string, req *FindRequest) 
 	if err != nil {
 		return nil, fmt.Errorf("encode find request: %w", err)
 	}
-	return c.stream(ctx, http.MethodPost, collectionActionPath(collection, "find"), body, "application/json")
+	return c.stream(ctx, http.MethodPost, c.collectionActionPath(collection, "find"), body, "application/json")
 }
 
 // Patch applies a partial update to the documents matched by the query and
@@ -212,7 +215,7 @@ func (c *Client) Patch(ctx context.Context, collection string, req *PatchRequest
 	if err != nil {
 		return nil, fmt.Errorf("encode patch request: %w", err)
 	}
-	return c.stream(ctx, http.MethodPost, collectionActionPath(collection, "patch"), body, "application/json")
+	return c.stream(ctx, http.MethodPost, c.collectionActionPath(collection, "patch"), body, "application/json")
 }
 
 // Remove deletes the documents matched by the query and streams the removed
@@ -222,7 +225,7 @@ func (c *Client) Remove(ctx context.Context, collection string, req *RemoveReque
 	if err != nil {
 		return nil, fmt.Errorf("encode remove request: %w", err)
 	}
-	return c.stream(ctx, http.MethodPost, collectionActionPath(collection, "remove"), body, "application/json")
+	return c.stream(ctx, http.MethodPost, c.collectionActionPath(collection, "remove"), body, "application/json")
 }
 
 func (c *Client) stream(ctx context.Context, method, path string, body io.Reader, contentType string) (*JSONStream, error) {
@@ -278,6 +281,12 @@ func (c *Client) do(ctx context.Context, method, path string, body io.Reader, co
 	if contentType != "" {
 		req.Header.Set("Content-Type", contentType)
 	}
+	if c.apiKey != "" {
+		req.Header.Set("Api-Key", c.apiKey)
+	}
+	if c.apiSecret != "" {
+		req.Header.Set("Api-Secret", c.apiSecret)
+	}
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -292,12 +301,23 @@ func (c *Client) do(ctx context.Context, method, path string, body io.Reader, co
 	return resp, nil
 }
 
-func collectionPath(collection string) string {
-	return "/v1/collections/" + url.PathEscape(collection)
+func (c *Client) collectionsPath() string {
+	if c.databaseID == "" {
+		return "/v1/collections"
+	}
+	return "/v1/databases/" + url.PathEscape(c.databaseID) + "/collections"
 }
 
-func collectionActionPath(collection, action string) string {
-	return collectionPath(collection) + ":" + action
+func (c *Client) collectionPath(collection string) string {
+	path := c.collectionsPath()
+	if collection == "" {
+		return path
+	}
+	return path + "/" + url.PathEscape(collection)
+}
+
+func (c *Client) collectionActionPath(collection, action string) string {
+	return c.collectionPath(collection) + ":" + action
 }
 
 func encodeJSONPayload(payload any) (io.Reader, error) {
